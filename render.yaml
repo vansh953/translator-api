@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: translation-api
+    runtime: docker
+    plan: free          # free tier — spins down after 15 min idle
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: HF_HOME
+        value: /home/user/.cache/huggingface
