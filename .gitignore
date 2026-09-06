@@ -38,3 +38,9 @@ Thumbs.db
 *.log
 htmlcov/
 .coverage
+
+# Local-only test scripts (not needed in Space)
+test_live.py
+test_mock.py
+install_torch.log
+render.yaml

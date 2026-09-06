@@ -13,7 +13,7 @@ pinned: false
 Free, self-hosted translation API powered by **IndicTrans2** (AI4Bharat).  
 Supports **English ↔ Hindi, Punjabi, Gujarati, Marathi** — with automatic Indic→Indic pivot.
 
-**Live URL:** `https://translation-api.onrender.com` *(replace after Render deploy)*
+**Live URL:** `https://huggingface.co/spaces/YOUR_USERNAME/translation-api` *(replace YOUR_USERNAME after deploying)*
 
 ---
 
@@ -104,5 +104,5 @@ module.exports = { translate };
 
 - **Model**: [IndicTrans2 dist-200M](https://huggingface.co/ai4bharat/indictrans2-en-indic-dist-200M) by AI4Bharat
 - **Framework**: FastAPI + Uvicorn
-- **Deployment**: Render (Docker, free tier)
+- **Deployment**: [Hugging Face Spaces](https://huggingface.co/spaces) (Docker, free 16 GB CPU)
 - **Toolkit**: [IndicTransToolkit](https://github.com/VarunGumma/IndicTransToolkit) for preprocessing
