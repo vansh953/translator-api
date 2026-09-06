@@ -30,9 +30,12 @@ LANG_CODES: dict[str, str] = {
     "marathi":  "mar_Deva",
 }
 
-NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
-HF_API_URL  = f"https://api-inference.huggingface.co/models/{NLLB_MODEL}"
-HF_TOKEN    = os.getenv("HF_TOKEN")          # optional — raises rate limits
+NLLB_MODEL         = "facebook/nllb-200-distilled-600M"
+HF_API_URL         = f"https://router.huggingface.co/hf-inference/models/{NLLB_MODEL}"
+HF_LEGACY_URL      = f"https://api-inference.huggingface.co/models/{NLLB_MODEL}"
+HF_ROUTER_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
+HF_FALLBACK_MODEL  = "Qwen/Qwen2.5-7B-Instruct"
+HF_TOKEN           = os.getenv("HF_TOKEN")          # optional — raises rate limits
 
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
@@ -66,21 +69,22 @@ app.add_middleware(
 )
 
 
-# ── Pydantic schemas ──────────────────────────────────────────────────────────
+# ── Pydantic models ───────────────────────────────────────────────────────────
 
 class TranslateRequest(BaseModel):
     text: str
-    source_language: str   # "english" | "hindi" | "punjabi" | "gujarati" | "marathi"
+    source_language: str
     target_language: str
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "text": "Hello, how are you?",
                 "source_language": "english",
                 "target_language": "punjabi",
             }
         }
+    }
 
 
 class TranslateResponse(BaseModel):
@@ -92,8 +96,43 @@ class TranslateResponse(BaseModel):
 
 # ── Core translation logic ────────────────────────────────────────────────────
 
-def _call_hf_api(text: str, src_code: str, tgt_code: str) -> str:
-    """Call HF Inference API directly via HTTP — no SDK provider issues."""
+def _call_hf_chat_fallback(text: str, source_lang: str, target_lang: str) -> str:
+    """Fallback to HF Inference Providers chat completions if task endpoint is unavailable."""
+    headers = {"Content-Type": "application/json"}
+    if HF_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
+
+    payload = {
+        "model": HF_FALLBACK_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    f"You are a professional translator. Translate the given text accurately from {source_lang} to {target_lang}. "
+                    "Return ONLY the direct translated text. Do not add quotes, explanations, or notes."
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 1000,
+    }
+    try:
+        resp = requests.post(HF_ROUTER_CHAT_URL, headers=headers, json=payload, timeout=30)
+        if resp.ok:
+            data = resp.json()
+            choices = data.get("choices", [])
+            if choices:
+                content = choices[0].get("message", {}).get("content", "").strip()
+                if content:
+                    return content
+    except Exception as exc:
+        print(f"Fallback chat completion failed: {exc}")
+    return ""
+
+
+def _call_hf_api(text: str, src_code: str, tgt_code: str, source_lang: str = "", target_lang: str = "") -> str:
+    """Call HF Inference API directly via HTTP with fallback."""
     headers = {"Content-Type": "application/json"}
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
@@ -106,29 +145,45 @@ def _call_hf_api(text: str, src_code: str, tgt_code: str) -> str:
         },
     }
 
-    resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
+    endpoints = [HF_API_URL, HF_LEGACY_URL]
+    last_error = ""
 
-    if resp.status_code == 503:
-        # Model is loading — HF returns 503 with estimated_time
-        info = resp.json()
-        wait = info.get("estimated_time", "unknown")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Model is loading on HF servers, retry in ~{wait}s",
-        )
+    for url in endpoints:
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 503:
+                info = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+                wait = info.get("estimated_time", "unknown")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Model is loading on HF servers, retry in ~{wait}s",
+                )
 
-    if not resp.ok:
-        raise HTTPException(
-            status_code=502,
-            detail=f"HF Inference API error {resp.status_code}: {resp.text[:300]}",
-        )
+            if resp.ok:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    item = data[0]
+                    if isinstance(item, dict):
+                        return item.get("translation_text", str(item))
+                    return str(item)
+                return str(data)
+            else:
+                last_error = f"{url} returned status {resp.status_code}: {resp.text[:200]}"
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_error = f"Request to {url} failed: {exc}"
 
-    data = resp.json()
-    # Normal response: [{"translation_text": "..."}]
-    if isinstance(data, list) and data:
-        return data[0].get("translation_text", str(data[0]))
-    # Fallback for unexpected shapes
-    return str(data)
+    # If direct endpoints did not succeed, try HF Provider Chat fallback
+    if source_lang and target_lang:
+        fallback_translated = _call_hf_chat_fallback(text, source_lang, target_lang)
+        if fallback_translated:
+            return fallback_translated
+
+    raise HTTPException(
+        status_code=502,
+        detail=f"HF Inference error: {last_error}",
+    )
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -148,7 +203,7 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
-    return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt])
+    return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
