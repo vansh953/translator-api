@@ -3,5 +3,5 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 
 # ── Translation engines ───────────────────────────────────────────────────────
+# deep-translator removed — Google changed their unofficial endpoint (returns 400)
 requests>=2.28.0
-deep-translator>=1.11.4

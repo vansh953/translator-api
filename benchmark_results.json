@@ -1,0 +1,178 @@
+{
+  "timestamp": "2026-09-06 23:57:51",
+  "target_url": "https://translator-api-4sky.onrender.com",
+  "metrics": {
+    "total_pairs_tested": 20,
+    "passed_pairs": 20,
+    "success_rate_percent": 100.0,
+    "mean_latency_ms": 1572.27,
+    "median_latency_ms": 1672.2,
+    "min_latency_ms": 763.24,
+    "max_latency_ms": 2146.54,
+    "p95_latency_ms": 1866.8,
+    "concurrent_rps": 1.19,
+    "total_concurrent_time_s": 8.4
+  },
+  "results": [
+    {
+      "tag": "EN -> HI",
+      "status": "PASS",
+      "latency_ms": 1866.8030999833718,
+      "input": "Hello, how are you? Welcome to our platform.",
+      "output": "नमस्ते, आप कैसे हैं? हमारे प्लैटफ़ॉर्म पर आपका स्वागत है।",
+      "bytes": 288
+    },
+    {
+      "tag": "HI -> EN",
+      "status": "PASS",
+      "latency_ms": 1825.987600022927,
+      "input": "भारत एक सुंदर और महान देश है।",
+      "output": "India is a beautiful and great country.",
+      "bytes": 209
+    },
+    {
+      "tag": "EN -> PA",
+      "status": "PASS",
+      "latency_ms": 1800.2936999546364,
+      "input": "Good morning, have a nice day!",
+      "output": "ਸ਼ੁਭ ਸਵੇਰ, ਇੱਕ ਚੰਗਾ ਦਿਨ ਹੈ!",
+      "bytes": 194
+    },
+    {
+      "tag": "PA -> EN",
+      "status": "PASS",
+      "latency_ms": 1585.4613000992686,
+      "input": "ਮੇਰਾ ਨਾਮ ਅਰਜੁਨ ਹੈ ਅਤੇ ਮੈਂ ਦਿੱਲੀ ਵਿੱਚ ਰਹਿੰਦਾ ਹਾਂ।",
+      "output": "My name is Arjun and I live in Delhi.",
+      "bytes": 260
+    },
+    {
+      "tag": "EN -> GU",
+      "status": "PASS",
+      "latency_ms": 1688.0963000003248,
+      "input": "Good morning, have a nice day!",
+      "output": "ગુડ મોર્નિંગનો દિવસ સરસ રહે છે",
+      "bytes": 208
+    },
+    {
+      "tag": "GU -> EN",
+      "status": "PASS",
+      "latency_ms": 1606.0576000018045,
+      "input": "આજે હવામાન ખૂબ સુંદર છે.",
+      "output": "The weather is very beautiful today.",
+      "bytes": 196
+    },
+    {
+      "tag": "EN -> MR",
+      "status": "PASS",
+      "latency_ms": 1810.5070000747219,
+      "input": "Good morning, have a nice day!",
+      "output": "Bye the way मी तुला सकाळीच सांगितलं की तुझा दिवस चांगला जावो.",
+      "bytes": 268
+    },
+    {
+      "tag": "MR -> EN",
+      "status": "PASS",
+      "latency_ms": 1666.4767999900505,
+      "input": "नमस्कार, तुमचे येथे स्वागत आहे.",
+      "output": "Hi, you're welcome here.",
+      "bytes": 202
+    },
+    {
+      "tag": "HI -> PA",
+      "status": "PASS",
+      "latency_ms": 1734.8415999440476,
+      "input": "आपका स्वागत है।",
+      "output": "ਤੁਹਾਡਾ ਸਵਾਗਤ ਹੈ.",
+      "bytes": 178
+    },
+    {
+      "tag": "PA -> HI",
+      "status": "PASS",
+      "latency_ms": 1677.9240000760183,
+      "input": "ਤੁਹਾਡਾ ਸਵਾਗਤ ਹੈ।",
+      "output": "आपका स्वागतहै।",
+      "bytes": 179
+    },
+    {
+      "tag": "HI -> GU",
+      "status": "PASS",
+      "latency_ms": 1590.6215000431985,
+      "input": "आज का मौसम बहुत अच्छा है।",
+      "output": "આજનું હવામાન ખૂબ સારું છે.",
+      "bytes": 229
+    },
+    {
+      "tag": "GU -> HI",
+      "status": "PASS",
+      "latency_ms": 1709.1107999440283,
+      "input": "તમારું સ્વાગત છે.",
+      "output": "आपका स्वागत है।",
+      "bytes": 182
+    },
+    {
+      "tag": "HI -> MR",
+      "status": "PASS",
+      "latency_ms": 1859.3330000294372,
+      "input": "आज का दिन बहुत अच्छा है।",
+      "output": "आजचा दिवस खूप चांगला आहे.",
+      "bytes": 222
+    },
+    {
+      "tag": "MR -> HI",
+      "status": "PASS",
+      "latency_ms": 1605.7630999712273,
+      "input": "तुमचे स्वागत आहे.",
+      "output": "आपका स्वागत है।",
+      "bytes": 181
+    },
+    {
+      "tag": "PA -> GU",
+      "status": "PASS",
+      "latency_ms": 1716.8347999686375,
+      "input": "ਧੰਨਵਾਦ",
+      "output": "આભાર",
+      "bytes": 128
+    },
+    {
+      "tag": "GU -> PA",
+      "status": "PASS",
+      "latency_ms": 1560.7406999915838,
+      "input": "આભાર",
+      "output": "ਤੁਹਾਡਾ ਧੰਨਵਾਦ",
+      "bytes": 147
+    },
+    {
+      "tag": "MR -> GU",
+      "status": "PASS",
+      "latency_ms": 1651.4222000259906,
+      "input": "शुभ प्रभात",
+      "output": "ગુડ મોર્નિંગ",
+      "bytes": 160
+    },
+    {
+      "tag": "GU -> MR",
+      "status": "PASS",
+      "latency_ms": 1680.498700006865,
+      "input": "શુભ સવાર",
+      "output": "शुभ सकाळ",
+      "bytes": 142
+    },
+    {
+      "tag": "PA -> MR",
+      "status": "PASS",
+      "latency_ms": 2146.544100018218,
+      "input": "ਤੁਹਾਡਾ ਧੰਨਵਾਦ",
+      "output": "धन्यवाद",
+      "bytes": 155
+    },
+    {
+      "tag": "MR -> PA",
+      "status": "PASS",
+      "latency_ms": 1722.5981999654323,
+      "input": "तुमचे आभार",
+      "output": "ਤੁਹਾਡਾ ਧੰਨਵਾਦ",
+      "bytes": 162
+    }
+  ]
+}

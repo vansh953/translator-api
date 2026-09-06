@@ -224,12 +224,20 @@ def _mymemory_translate(text: str, src: str, tgt: str) -> str:
                 timeout=12,
             )
             if r.ok:
-                out = r.json().get("responseData", {}).get("translatedText", "")
+                data = r.json()
+                resp_data = data.get("responseData", {})
+                out = resp_data.get("translatedText", "")
+                match_score = float(resp_data.get("match", 1.0))
+                # Reject low-confidence matches (e.g. "I am feeling sick" -> "I love you")
+                if match_score < 0.5:
+                    print(f"MyMemory low confidence ({match_score:.2f}) for '{q[:40]}' {sl}|{tl} — skipping")
+                    return ""
                 if _is_valid_translation(out):
                     return out.strip()
         except Exception as e:
             print(f"MyMemory error {sl}|{tl}: {e}")
         return ""
+
 
     # Direct translation
     res = _call_mm(text, g_src, g_tgt)
@@ -248,46 +256,12 @@ def _mymemory_translate(text: str, src: str, tgt: str) -> str:
 
 
 def _google_translate_safe(text: str, src: str, tgt: str) -> str:
-    """Safe Google Translate with code, full name, auto-detect, and English pivot."""
-    from deep_translator import GoogleTranslator
-    g_src = GOOGLE_LANG_CODES.get(src, src)
-    g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
-
-    # Attempt 1: Direct by code (e.g. en -> hi)
-    try:
-        res = GoogleTranslator(source=g_src, target=g_tgt).translate(text)
-        if _is_valid_translation(res):
-            return res.strip()
-    except Exception as e:
-        print(f"GoogleTranslator code {g_src}->{g_tgt} failed: {e}")
-
-    # Attempt 2: Direct by full language name (e.g. english -> marathi)
-    try:
-        res = GoogleTranslator(source=src, target=tgt).translate(text)
-        if _is_valid_translation(res):
-            return res.strip()
-    except Exception as e:
-        print(f"GoogleTranslator name {src}->{tgt} failed: {e}")
-
-    # Attempt 3: Auto-detect source language
-    try:
-        res = GoogleTranslator(source="auto", target=g_tgt).translate(text)
-        if _is_valid_translation(res):
-            return res.strip()
-    except Exception as e:
-        print(f"GoogleTranslator auto->{g_tgt} failed: {e}")
-
-    # Attempt 4: For Indic-to-Indic pairs, pivot via English
-    if src != "english" and tgt != "english":
-        try:
-            pivot = GoogleTranslator(source="auto", target="en").translate(text)
-            if _is_valid_translation(pivot):
-                res = GoogleTranslator(source="en", target=g_tgt).translate(pivot.strip())
-                if _is_valid_translation(res):
-                    return res.strip()
-        except Exception as e:
-            print(f"GoogleTranslator pivot {src}->en->{tgt} failed: {e}")
-
+    """
+    NOTE: deep_translator's GoogleTranslator was removed — Google changed their
+    unofficial endpoint and it now returns 400 errors on every call.
+    This stub is kept for interface compatibility but always returns "".
+    Use MyMemory (primary) and HF API (fallback) instead.
+    """
     return ""
 
 
@@ -313,12 +287,9 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if _is_valid_translation(res):
         return res
 
-    # 2. Secondary engine: GoogleTranslator (may be blocked on some cloud IPs)
-    res = _google_translate_safe(text, src, tgt)
-    if _is_valid_translation(res):
-        return res
-
-    # 3. Tertiary engine: HF Inference API
+    # 2. Secondary engine: HF Inference API (NLLB-200 + chat model fallback)
+    #    (deep_translator GoogleTranslator removed — Google's unofficial endpoint
+    #     returns 400 errors; MyMemory handles most pairs reliably)
     return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 
