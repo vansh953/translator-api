@@ -202,6 +202,50 @@ GOOGLE_LANG_CODES: dict[str, str] = {
 }
 
 
+def _google_translate_safe(text: str, src: str, tgt: str) -> str:
+    """Safe Google Translate with code, full name, auto-detect, and English pivot."""
+    from deep_translator import GoogleTranslator
+    g_src = GOOGLE_LANG_CODES.get(src, src)
+    g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
+
+    # Attempt 1: Direct by code (e.g. en -> hi)
+    try:
+        res = GoogleTranslator(source=g_src, target=g_tgt).translate(text)
+        if res and res.strip():
+            return res.strip()
+    except Exception as e:
+        print(f"GoogleTranslator code {g_src}->{g_tgt} failed: {e}")
+
+    # Attempt 2: Direct by full language name (e.g. english -> marathi)
+    try:
+        res = GoogleTranslator(source=src, target=tgt).translate(text)
+        if res and res.strip():
+            return res.strip()
+    except Exception as e:
+        print(f"GoogleTranslator name {src}->{tgt} failed: {e}")
+
+    # Attempt 3: Auto-detect source language
+    try:
+        res = GoogleTranslator(source="auto", target=g_tgt).translate(text)
+        if res and res.strip():
+            return res.strip()
+    except Exception as e:
+        print(f"GoogleTranslator auto->{g_tgt} failed: {e}")
+
+    # Attempt 4: For Indic-to-Indic pairs, pivot via English
+    if src != "english" and tgt != "english":
+        try:
+            pivot = GoogleTranslator(source="auto", target="en").translate(text)
+            if pivot and pivot.strip():
+                res = GoogleTranslator(source="en", target=g_tgt).translate(pivot.strip())
+                if res and res.strip():
+                    return res.strip()
+        except Exception as e:
+            print(f"GoogleTranslator pivot {src}->en->{tgt} failed: {e}")
+
+    return ""
+
+
 def translate(text: str, source_lang: str, target_lang: str) -> str:
     src = source_lang.strip().lower()
     tgt = target_lang.strip().lower()
@@ -219,29 +263,12 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
-    # 1. Primary engine: deep_translator (fast, 100% free, direct Indic-to-Indic support)
-    try:
-        from deep_translator import GoogleTranslator
-        g_src = GOOGLE_LANG_CODES.get(src, src)
-        g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
-        result = GoogleTranslator(source=g_src, target=g_tgt).translate(text)
-        if result and result.strip():
-            return result.strip()
-    except Exception as e:
-        print(f"GoogleTranslator error: {e}")
+    # 1. Primary engine: robust GoogleTranslator pipeline
+    res = _google_translate_safe(text, src, tgt)
+    if res:
+        return res
 
-    # 2. Secondary engine: MyMemory
-    try:
-        from deep_translator import MyMemoryTranslator
-        g_src = GOOGLE_LANG_CODES.get(src, src)
-        g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
-        result = MyMemoryTranslator(source=g_src, target=g_tgt).translate(text)
-        if result and result.strip():
-            return result.strip()
-    except Exception as e:
-        print(f"MyMemoryTranslator error: {e}")
-
-    # 3. Third engine: HF Inference API
+    # 2. Secondary engine: HF Inference API
     return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 
