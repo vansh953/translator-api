@@ -33,5 +33,5 @@ RUN python download_models.py
 COPY --chown=user:user . .
 
 # ── Expose & run ──────────────────────────────────────────────────────────────
-EXPOSE 7860
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+EXPOSE 8080
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
