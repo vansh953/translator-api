@@ -2,10 +2,10 @@ services:
   - type: web
     name: translation-api
     runtime: docker
-    plan: free          # free tier — spins down after 15 min idle
+    plan: free
     healthCheckPath: /health
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: HF_HOME
-        value: /home/user/.cache/huggingface
+      - key: HF_TOKEN
+        sync: false   # set this manually in Render dashboard for higher rate limits
