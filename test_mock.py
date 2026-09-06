@@ -207,9 +207,15 @@ with patch("app.requests.post", side_effect=mock_requests_post):
         loading_resp = MagicMock()
         loading_resp.status_code = 503
         loading_resp.ok = False
+        loading_resp.headers = {"content-type": "application/json"}
         loading_resp.json.return_value = {"error": "loading", "estimated_time": 20.0}
         loading_resp.text = '{"error": "loading", "estimated_time": 20.0}'
-        with patch("app.requests.post", return_value=loading_resp):
+        # MyMemory uses requests.get — make it fail so HF fallback triggers
+        mm_fail = MagicMock()
+        mm_fail.ok = False
+        mm_fail.json.return_value = {"responseData": {"translatedText": ""}}
+        with patch("app.requests.post", return_value=loading_resp), \
+             patch("app.requests.get", return_value=mm_fail):
             r = client.post("/translate", json={
                 "text": "Hello",
                 "source_language": "english",

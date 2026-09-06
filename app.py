@@ -202,6 +202,51 @@ GOOGLE_LANG_CODES: dict[str, str] = {
 }
 
 
+def _is_valid_translation(res: str) -> bool:
+    if not res or not res.strip():
+        return False
+    low = res.lower()
+    if "error 500" in low or "that's an error" in low or "that’s an error" in low or "server error" in low:
+        return False
+    return True
+
+
+def _mymemory_translate(text: str, src: str, tgt: str) -> str:
+    """Official MyMemory REST API — reliable on all cloud servers, no IP blocking."""
+    g_src = GOOGLE_LANG_CODES.get(src, src)
+    g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
+
+    def _call_mm(q, sl, tl):
+        try:
+            r = requests.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": q, "langpair": f"{sl}|{tl}"},
+                timeout=12,
+            )
+            if r.ok:
+                out = r.json().get("responseData", {}).get("translatedText", "")
+                if _is_valid_translation(out):
+                    return out.strip()
+        except Exception as e:
+            print(f"MyMemory error {sl}|{tl}: {e}")
+        return ""
+
+    # Direct translation
+    res = _call_mm(text, g_src, g_tgt)
+    if _is_valid_translation(res):
+        return res
+
+    # For Indic-to-Indic pairs where MyMemory has weak direct support, pivot via English
+    if src != "english" and tgt != "english":
+        pivot = _call_mm(text, g_src, "en")
+        if _is_valid_translation(pivot):
+            final = _call_mm(pivot, "en", g_tgt)
+            if _is_valid_translation(final):
+                return final
+
+    return ""
+
+
 def _google_translate_safe(text: str, src: str, tgt: str) -> str:
     """Safe Google Translate with code, full name, auto-detect, and English pivot."""
     from deep_translator import GoogleTranslator
@@ -211,7 +256,7 @@ def _google_translate_safe(text: str, src: str, tgt: str) -> str:
     # Attempt 1: Direct by code (e.g. en -> hi)
     try:
         res = GoogleTranslator(source=g_src, target=g_tgt).translate(text)
-        if res and res.strip():
+        if _is_valid_translation(res):
             return res.strip()
     except Exception as e:
         print(f"GoogleTranslator code {g_src}->{g_tgt} failed: {e}")
@@ -219,7 +264,7 @@ def _google_translate_safe(text: str, src: str, tgt: str) -> str:
     # Attempt 2: Direct by full language name (e.g. english -> marathi)
     try:
         res = GoogleTranslator(source=src, target=tgt).translate(text)
-        if res and res.strip():
+        if _is_valid_translation(res):
             return res.strip()
     except Exception as e:
         print(f"GoogleTranslator name {src}->{tgt} failed: {e}")
@@ -227,7 +272,7 @@ def _google_translate_safe(text: str, src: str, tgt: str) -> str:
     # Attempt 3: Auto-detect source language
     try:
         res = GoogleTranslator(source="auto", target=g_tgt).translate(text)
-        if res and res.strip():
+        if _is_valid_translation(res):
             return res.strip()
     except Exception as e:
         print(f"GoogleTranslator auto->{g_tgt} failed: {e}")
@@ -236,9 +281,9 @@ def _google_translate_safe(text: str, src: str, tgt: str) -> str:
     if src != "english" and tgt != "english":
         try:
             pivot = GoogleTranslator(source="auto", target="en").translate(text)
-            if pivot and pivot.strip():
+            if _is_valid_translation(pivot):
                 res = GoogleTranslator(source="en", target=g_tgt).translate(pivot.strip())
-                if res and res.strip():
+                if _is_valid_translation(res):
                     return res.strip()
         except Exception as e:
             print(f"GoogleTranslator pivot {src}->en->{tgt} failed: {e}")
@@ -263,12 +308,17 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
-    # 1. Primary engine: robust GoogleTranslator pipeline
-    res = _google_translate_safe(text, src, tgt)
-    if res:
+    # 1. Primary engine: MyMemory REST API (official, no IP blocking issues)
+    res = _mymemory_translate(text, src, tgt)
+    if _is_valid_translation(res):
         return res
 
-    # 2. Secondary engine: HF Inference API
+    # 2. Secondary engine: GoogleTranslator (may be blocked on some cloud IPs)
+    res = _google_translate_safe(text, src, tgt)
+    if _is_valid_translation(res):
+        return res
+
+    # 3. Tertiary engine: HF Inference API
     return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 
