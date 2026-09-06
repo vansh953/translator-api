@@ -32,10 +32,15 @@ LANG_CODES: dict[str, str] = {
 
 NLLB_MODEL         = "facebook/nllb-200-distilled-600M"
 HF_API_URL         = f"https://router.huggingface.co/hf-inference/models/{NLLB_MODEL}"
-HF_LEGACY_URL      = f"https://api-inference.huggingface.co/models/{NLLB_MODEL}"
 HF_ROUTER_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
-HF_FALLBACK_MODEL  = "Qwen/Qwen2.5-7B-Instruct"
 HF_TOKEN           = os.getenv("HF_TOKEN")          # optional — raises rate limits
+
+# Candidate models for router chat fallback
+CANDIDATE_MODELS = [
+    "meta-llama/Llama-3.1-8B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
+    "mistralai/Mistral-7B-Instruct-v0.3",
+]
 
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
@@ -102,32 +107,35 @@ def _call_hf_chat_fallback(text: str, source_lang: str, target_lang: str) -> str
     if HF_TOKEN:
         headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
-    payload = {
-        "model": HF_FALLBACK_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a professional translator. Translate the given text accurately from {source_lang} to {target_lang}. "
-                    "Return ONLY the direct translated text. Do not add quotes, explanations, or notes."
-                ),
-            },
-            {"role": "user", "content": text},
-        ],
-        "temperature": 0.1,
-        "max_tokens": 1000,
-    }
-    try:
-        resp = requests.post(HF_ROUTER_CHAT_URL, headers=headers, json=payload, timeout=30)
-        if resp.ok:
-            data = resp.json()
-            choices = data.get("choices", [])
-            if choices:
-                content = choices[0].get("message", {}).get("content", "").strip()
-                if content:
-                    return content
-    except Exception as exc:
-        print(f"Fallback chat completion failed: {exc}")
+    for model_name in CANDIDATE_MODELS:
+        payload = {
+            "model": model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a professional translator. Translate the given text accurately from {source_lang} to {target_lang}. "
+                        "Output ONLY the translated text in the target script. Do NOT add any preamble, explanation, notes, or quotes."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 1000,
+        }
+        try:
+            resp = requests.post(HF_ROUTER_CHAT_URL, headers=headers, json=payload, timeout=25)
+            if resp.ok:
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    content = choices[0].get("message", {}).get("content", "").strip()
+                    if content:
+                        return content
+            else:
+                print(f"Model {model_name} returned {resp.status_code}: {resp.text[:100]}")
+        except Exception as exc:
+            print(f"Model {model_name} failed: {exc}")
     return ""
 
 
@@ -145,36 +153,35 @@ def _call_hf_api(text: str, src_code: str, tgt_code: str, source_lang: str = "",
         },
     }
 
-    endpoints = [HF_API_URL, HF_LEGACY_URL]
     last_error = ""
 
-    for url in endpoints:
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 503:
-                info = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
-                wait = info.get("estimated_time", "unknown")
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Model is loading on HF servers, retry in ~{wait}s",
-                )
+    # 1. Try modern router endpoint
+    try:
+        resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code == 503:
+            info = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+            wait = info.get("estimated_time", "unknown")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Model is loading on HF servers, retry in ~{wait}s",
+            )
 
-            if resp.ok:
-                data = resp.json()
-                if isinstance(data, list) and data:
-                    item = data[0]
-                    if isinstance(item, dict):
-                        return item.get("translation_text", str(item))
-                    return str(item)
-                return str(data)
-            else:
-                last_error = f"{url} returned status {resp.status_code}: {resp.text[:200]}"
-        except HTTPException:
-            raise
-        except Exception as exc:
-            last_error = f"Request to {url} failed: {exc}"
+        if resp.ok:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                item = data[0]
+                if isinstance(item, dict):
+                    return item.get("translation_text", str(item))
+                return str(item)
+            return str(data)
+        else:
+            last_error = f"{HF_API_URL} returned {resp.status_code}: {resp.text[:200]}"
+    except HTTPException:
+        raise
+    except Exception as exc:
+        last_error = f"Request to {HF_API_URL} failed: {exc}"
 
-    # If direct endpoints did not succeed, try HF Provider Chat fallback
+    # 2. If direct task endpoint did not succeed, try HF Provider Chat fallback
     if source_lang and target_lang:
         fallback_translated = _call_hf_chat_fallback(text, source_lang, target_lang)
         if fallback_translated:
@@ -238,3 +245,41 @@ async def health():
         "backend": "HF Inference API",
         "hf_token_set": HF_TOKEN is not None,
     }
+
+
+@app.get("/debug-hf", summary="Diagnose Hugging Face API connectivity")
+async def debug_hf():
+    """Diagnostic tool to inspect HF router connectivity from this server."""
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    report = {}
+
+    # Test candidate chat models
+    for m in CANDIDATE_MODELS:
+        try:
+            payload = {
+                "model": m,
+                "messages": [{"role": "user", "content": "Translate 'Hello' to Hindi in one word."}],
+                "max_tokens": 30,
+            }
+            resp = requests.post(HF_ROUTER_CHAT_URL, headers=headers, json=payload, timeout=12)
+            if resp.ok:
+                choice = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                report[m] = f"SUCCESS: {choice}"
+            else:
+                report[m] = f"HTTP {resp.status_code}: {resp.text[:120]}"
+        except Exception as exc:
+            report[m] = f"EXCEPTION: {exc}"
+
+    # Test direct task endpoint
+    try:
+        task_payload = {
+            "inputs": "Hello",
+            "parameters": {"src_lang": "eng_Latn", "tgt_lang": "hin_Deva"},
+        }
+        r = requests.post(HF_API_URL, headers=headers, json=task_payload, timeout=12)
+        report["nllb_task_api"] = f"HTTP {r.status_code}: {r.text[:150]}"
+    except Exception as exc:
+        report["nllb_task_api"] = f"EXCEPTION: {exc}"
+
+    return report
+
