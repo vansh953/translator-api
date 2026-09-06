@@ -193,6 +193,15 @@ def _call_hf_api(text: str, src_code: str, tgt_code: str, source_lang: str = "",
     )
 
 
+GOOGLE_LANG_CODES: dict[str, str] = {
+    "english":  "en",
+    "hindi":    "hi",
+    "punjabi":  "pa",
+    "gujarati": "gu",
+    "marathi":  "mr",
+}
+
+
 def translate(text: str, source_lang: str, target_lang: str) -> str:
     src = source_lang.strip().lower()
     tgt = target_lang.strip().lower()
@@ -210,6 +219,29 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
+    # 1. Primary engine: deep_translator (fast, 100% free, direct Indic-to-Indic support)
+    try:
+        from deep_translator import GoogleTranslator
+        g_src = GOOGLE_LANG_CODES.get(src, src)
+        g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
+        result = GoogleTranslator(source=g_src, target=g_tgt).translate(text)
+        if result and result.strip():
+            return result.strip()
+    except Exception as e:
+        print(f"GoogleTranslator error: {e}")
+
+    # 2. Secondary engine: MyMemory
+    try:
+        from deep_translator import MyMemoryTranslator
+        g_src = GOOGLE_LANG_CODES.get(src, src)
+        g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
+        result = MyMemoryTranslator(source=g_src, target=g_tgt).translate(text)
+        if result and result.strip():
+            return result.strip()
+    except Exception as e:
+        print(f"MyMemoryTranslator error: {e}")
+
+    # 3. Third engine: HF Inference API
     return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 

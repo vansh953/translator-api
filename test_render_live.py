@@ -1,6 +1,11 @@
-"""
-Test suite against the live Render deployment: https://translator-api-4sky.onrender.com
-"""
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import requests
 import json
 import time

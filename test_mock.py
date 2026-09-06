@@ -51,6 +51,20 @@ def mock_requests_post(url, headers=None, json=None, timeout=None):
     translation = MOCK_TRANSLATIONS.get((src, tgt), f"[MOCK: {src}->{tgt}]")
     return make_mock_response(translation)
 
+# Mock GoogleTranslator so mock tests run purely through mocked backend
+class MockGoogleTranslator:
+    def __init__(self, source="auto", target="en"):
+        self.source = source
+        self.target = target
+
+    def translate(self, text):
+        raise Exception("Mock fallback to HF")
+
+# Apply patch to deep_translator in app
+import deep_translator
+deep_translator.GoogleTranslator = MockGoogleTranslator
+deep_translator.MyMemoryTranslator = MockGoogleTranslator
+
 # ── 4. Simple test runner ─────────────────────────────────────────────────────
 PASS = 0
 FAIL = 0
