@@ -4,16 +4,16 @@ emoji: 🌐
 colorFrom: blue
 colorTo: green
 sdk: docker
-app_port: 7860
+app_port: 8080
 pinned: false
 ---
 
 # 🌐 Indian Language Translation API
 
-Free, self-hosted translation API powered by **IndicTrans2** (AI4Bharat).  
-Supports **English ↔ Hindi, Punjabi, Gujarati, Marathi** — with automatic Indic→Indic pivot.
+Free translation API powered by **NLLB-200** (Meta AI) via HF Inference API.
+Supports **English ↔ Hindi, Punjabi, Gujarati, Marathi** — all pairs direct, no pivot needed.
 
-**Live URL:** `https://huggingface.co/spaces/YOUR_USERNAME/translation-api` *(replace YOUR_USERNAME after deploying)*
+**Live URL:** `https://YOUR_APP_URL` *(replace after deploying)*
 
 ---
 
@@ -59,7 +59,12 @@ Returns all supported language names.
 ### `GET /health`
 
 ```json
-{ "status": "ok", "models_loaded": true }
+{
+  "status": "ok",
+  "models_loaded": true,
+  "model": "facebook/nllb-200-distilled-600M",
+  "backend": "HF Inference API"
+}
 ```
 
 ---
@@ -69,12 +74,22 @@ Returns all supported language names.
 | From → To     | English | Hindi | Punjabi | Gujarati | Marathi |
 |---------------|:-------:|:-----:|:-------:|:--------:|:-------:|
 | **English**   | —       | ✅    | ✅      | ✅       | ✅      |
-| **Hindi**     | ✅      | —     | ✅*     | ✅*      | ✅*     |
-| **Punjabi**   | ✅      | ✅*   | —       | ✅*      | ✅*     |
-| **Gujarati**  | ✅      | ✅*   | ✅*     | —        | ✅*     |
-| **Marathi**   | ✅      | ✅*   | ✅*     | ✅*      | —       |
+| **Hindi**     | ✅      | —     | ✅      | ✅       | ✅      |
+| **Punjabi**   | ✅      | ✅    | —       | ✅       | ✅      |
+| **Gujarati**  | ✅      | ✅    | ✅      | —        | ✅      |
+| **Marathi**   | ✅      | ✅    | ✅      | ✅       | —       |
 
-*\* Indic → Indic pairs pivot through English automatically.*
+All Indic→Indic pairs are **direct** — no two-hop pivot needed.
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HF_TOKEN` | Optional | Free HF token — increases rate limits |
+
+Get a free token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
 ---
 
@@ -84,7 +99,7 @@ Returns all supported language names.
 // services/translationService.js
 const axios = require('axios');
 
-const TRANSLATION_API = process.env.TRANSLATION_API_URL || 'https://translation-api.onrender.com';
+const TRANSLATION_API = process.env.TRANSLATION_API_URL || 'https://your-app-url';
 
 async function translate(text, sourceLang, targetLang) {
   const { data } = await axios.post(`${TRANSLATION_API}/translate`, {
@@ -102,7 +117,8 @@ module.exports = { translate };
 
 ## Tech Stack
 
-- **Model**: [IndicTrans2 dist-200M](https://huggingface.co/ai4bharat/indictrans2-en-indic-dist-200M) by AI4Bharat
+- **Model**: [NLLB-200 distilled-600M](https://huggingface.co/facebook/nllb-200-distilled-600M) by Meta AI
+- **Backend**: HF Inference API (free, serverless)
 - **Framework**: FastAPI + Uvicorn
-- **Deployment**: [Hugging Face Spaces](https://huggingface.co/spaces) (Docker, free 16 GB CPU)
-- **Toolkit**: [IndicTransToolkit](https://github.com/VarunGumma/IndicTransToolkit) for preprocessing
+- **Deployment**: Docker (Cloud Run / Railway / any platform)
+- **RAM**: ~80 MB (no local model loading)

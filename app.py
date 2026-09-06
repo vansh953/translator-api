@@ -1,8 +1,7 @@
 """
-Indian Language Translation API — powered by IndicTrans2 (AI4Bharat)
-Models : indictrans2-en-indic-dist-200M  /  indictrans2-indic-en-dist-200M
+Indian Language Translation API — powered by NLLB-200 (Meta AI) via HF Inference API
 Languages: English, Hindi, Punjabi, Gujarati, Marathi
-Indic → Indic: two-hop pivot through English
+All pairs are direct — no two-hop pivot needed (NLLB-200 supports 200 languages natively).
 """
 
 import sys
@@ -13,16 +12,15 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import os
+import requests
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from IndicTransToolkit import IndicProcessor
 
 
-# ── Language configuration ────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 LANG_CODES: dict[str, str] = {
     "english":  "eng_Latn",
@@ -32,45 +30,19 @@ LANG_CODES: dict[str, str] = {
     "marathi":  "mar_Deva",
 }
 
-DEVICE = "cpu"
-
-# Global model store — populated once at startup via lifespan
-MODELS: dict = {}
+NLLB_MODEL  = "facebook/nllb-200-distilled-600M"
+HF_API_URL  = f"https://api-inference.huggingface.co/models/{NLLB_MODEL}"
+HF_TOKEN    = os.getenv("HF_TOKEN")          # optional — raises rate limits
 
 
 # ── Startup / shutdown ────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load both IndicTrans2 models once when the server starts."""
-    print("🔄  Loading IndicTrans2 models … (this takes ~30 s on first run)")
-
-    ip = IndicProcessor(inference=True)
-
-    print("   ↳ en → indic …")
-    en_indic_tok = AutoTokenizer.from_pretrained(
-        "ai4bharat/indictrans2-en-indic-dist-200M", trust_remote_code=True
-    )
-    en_indic_mdl = AutoModelForSeq2SeqLM.from_pretrained(
-        "ai4bharat/indictrans2-en-indic-dist-200M", trust_remote_code=True
-    ).to(DEVICE).eval()
-
-    print("   ↳ indic → en …")
-    indic_en_tok = AutoTokenizer.from_pretrained(
-        "ai4bharat/indictrans2-indic-en-dist-200M", trust_remote_code=True
-    )
-    indic_en_mdl = AutoModelForSeq2SeqLM.from_pretrained(
-        "ai4bharat/indictrans2-indic-en-dist-200M", trust_remote_code=True
-    ).to(DEVICE).eval()
-
-    MODELS.update({
-        "ip":       ip,
-        "en_indic": (en_indic_tok, en_indic_mdl),
-        "indic_en": (indic_en_tok, indic_en_mdl),
-    })
-    print("✅  Models ready — server accepting requests")
+    print(f"Translation API starting — using HF Inference API ({NLLB_MODEL})")
+    print("HF_TOKEN:", "set" if HF_TOKEN else "not set (anonymous, 300 req/hr limit)")
     yield
-    MODELS.clear()
+    print("Shutting down.")
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -78,17 +50,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Indian Language Translation API",
     description=(
-        "Free translation API powered by IndicTrans2 (AI4Bharat). "
-        "Supports English ↔ Hindi, Punjabi, Gujarati, Marathi. "
-        "Indic→Indic pairs pivot through English automatically."
+        "Free translation API powered by NLLB-200 (Meta AI) via HF Inference API. "
+        "Supports English, Hindi, Punjabi, Gujarati, Marathi — all pairs direct."
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # tighten this to your backend URL in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -119,45 +90,45 @@ class TranslateResponse(BaseModel):
     target_language: str
 
 
-# ── Internal translation logic ────────────────────────────────────────────────
+# ── Core translation logic ────────────────────────────────────────────────────
 
-def _run_model(
-    sentences: list[str],
-    src_code: str,
-    tgt_code: str,
-    model_key: str,
-) -> list[str]:
-    """
-    Run one translation hop through the specified model.
-    Uses IndicProcessor for mandatory pre- and post-processing.
-    """
-    ip: IndicProcessor = MODELS["ip"]
-    tokenizer, model = MODELS[model_key]
+def _call_hf_api(text: str, src_code: str, tgt_code: str) -> str:
+    """Call HF Inference API directly via HTTP — no SDK provider issues."""
+    headers = {"Content-Type": "application/json"}
+    if HF_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_TOKEN}"
 
-    # IndicProcessor MUST preprocess before tokenisation
-    batch = ip.preprocess_batch(sentences, src_lang=src_code, tgt_lang=tgt_code)
+    payload = {
+        "inputs": text,
+        "parameters": {
+            "src_lang": src_code,
+            "tgt_lang": tgt_code,
+        },
+    }
 
-    inputs = tokenizer(
-        batch,
-        padding="longest",
-        truncation=True,
-        max_length=256,
-        return_tensors="pt",
-    ).to(DEVICE)
+    resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=60)
 
-    with torch.inference_mode():
-        outputs = model.generate(
-            **inputs,
-            num_beams=5,
-            max_length=256,
-            num_return_sequences=1,
-            use_cache=False,
+    if resp.status_code == 503:
+        # Model is loading — HF returns 503 with estimated_time
+        info = resp.json()
+        wait = info.get("estimated_time", "unknown")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model is loading on HF servers, retry in ~{wait}s",
         )
 
-    decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    if not resp.ok:
+        raise HTTPException(
+            status_code=502,
+            detail=f"HF Inference API error {resp.status_code}: {resp.text[:300]}",
+        )
 
-    # IndicProcessor MUST postprocess the decoded strings
-    return ip.postprocess_batch(decoded, lang=tgt_code)
+    data = resp.json()
+    # Normal response: [{"translation_text": "..."}]
+    if isinstance(data, list) and data:
+        return data[0].get("translation_text", str(data[0]))
+    # Fallback for unexpected shapes
+    return str(data)
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -177,20 +148,7 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
-    src_code = LANG_CODES[src]
-    tgt_code = LANG_CODES[tgt]
-
-    # English → Indic  (single hop)
-    if src == "english":
-        return _run_model([text], src_code, tgt_code, "en_indic")[0]
-
-    # Indic → English  (single hop)
-    if tgt == "english":
-        return _run_model([text], src_code, tgt_code, "indic_en")[0]
-
-    # Indic → Indic  (two-hop pivot through English)
-    english_pivot = _run_model([text], src_code, "eng_Latn", "indic_en")[0]
-    return _run_model([english_pivot], "eng_Latn", tgt_code, "en_indic")[0]
+    return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt])
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
@@ -199,9 +157,7 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
 async def translate_endpoint(req: TranslateRequest):
     """
     Translate text between any supported language pair.
-
-    - **English ↔ Hindi / Punjabi / Gujarati / Marathi** — direct model hop
-    - **Indic ↔ Indic** — automatic two-hop pivot through English
+    All pairs are direct — NLLB-200 supports 200 languages natively.
     """
     translated = translate(req.text, req.source_language, req.target_language)
     return TranslateResponse(
@@ -220,8 +176,10 @@ async def list_languages():
 
 @app.get("/health", summary="Health check")
 async def health():
-    """Returns server status and whether models are loaded."""
+    """Returns server status and backend info."""
     return {
         "status": "ok",
-        "models_loaded": bool(MODELS),
+        "model": NLLB_MODEL,
+        "backend": "HF Inference API",
+        "hf_token_set": HF_TOKEN is not None,
     }
