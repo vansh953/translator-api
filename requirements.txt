@@ -1,7 +1,9 @@
 # ── Web framework ─────────────────────────────────────────────────────────────
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+pydantic>=2.0          # required by fastapi>=0.104; explicit pin prevents v1 installs
 
-# ── Translation engines ───────────────────────────────────────────────────────
-# deep-translator removed — Google changed their unofficial endpoint (returns 400)
+# ── Translation engines ──────────────────────────────────────────────────────
 requests>=2.28.0
+# Note: deep-translator removed — Google unofficial endpoint now returns 400 errors
+# MyMemory REST API (primary) + HF Inference (fallback) handle all 20 language pairs

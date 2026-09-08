@@ -12,11 +12,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+import asyncio
 import os
 import requests
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 
@@ -34,6 +36,7 @@ NLLB_MODEL         = "facebook/nllb-200-distilled-600M"
 HF_API_URL         = f"https://router.huggingface.co/hf-inference/models/{NLLB_MODEL}"
 HF_ROUTER_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_TOKEN           = os.getenv("HF_TOKEN")          # optional — raises rate limits
+DEBUG_SECRET       = os.getenv("DEBUG_SECRET", "")  # set this to protect /debug-hf endpoint
 
 # Candidate models for router chat fallback
 CANDIDATE_MODELS = [
@@ -206,7 +209,8 @@ def _is_valid_translation(res: str) -> bool:
     if not res or not res.strip():
         return False
     low = res.lower()
-    if "error 500" in low or "that's an error" in low or "that’s an error" in low or "server error" in low:
+    # Reject HTML error pages returned as translation text
+    if "error 500" in low or "that's an error" in low or "server error" in low:
         return False
     return True
 
@@ -255,14 +259,9 @@ def _mymemory_translate(text: str, src: str, tgt: str) -> str:
     return ""
 
 
-def _google_translate_safe(text: str, src: str, tgt: str) -> str:
-    """
-    NOTE: deep_translator's GoogleTranslator was removed — Google changed their
-    unofficial endpoint and it now returns 400 errors on every call.
-    This stub is kept for interface compatibility but always returns "".
-    Use MyMemory (primary) and HF API (fallback) instead.
-    """
-    return ""
+# NOTE: deep_translator's GoogleTranslator was removed — Google changed their
+# unofficial endpoint and it now returns 400 errors on every call.
+# MyMemory (primary) and HF API (fallback) handle all pairs reliably.
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -295,13 +294,22 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    """Redirect root to interactive API docs."""
+    return RedirectResponse(url="/docs")
+
+
 @app.post("/translate", response_model=TranslateResponse, summary="Translate text")
 async def translate_endpoint(req: TranslateRequest):
     """
     Translate text between any supported language pair.
     All pairs are direct — NLLB-200 supports 200 languages natively.
     """
-    translated = translate(req.text, req.source_language, req.target_language)
+    # Run blocking I/O (requests.post) off the event loop to avoid blocking async workers
+    translated = await asyncio.to_thread(
+        translate, req.text, req.source_language, req.target_language
+    )
     return TranslateResponse(
         original_text=req.text,
         translated_text=translated,
@@ -328,8 +336,16 @@ async def health():
 
 
 @app.get("/debug-hf", summary="Diagnose Hugging Face API connectivity")
-async def debug_hf():
-    """Diagnostic tool to inspect HF router connectivity from this server."""
+async def debug_hf(
+    secret: str = Query(default="", description="Set DEBUG_SECRET env var to protect this endpoint"),
+):
+    """
+    Diagnostic tool to inspect HF router connectivity from this server.
+    Protected by DEBUG_SECRET env var (set to empty string to disable protection).
+    """
+    if DEBUG_SECRET and secret != DEBUG_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid or missing debug secret.")
+
     headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
     report = {}
 

@@ -3,9 +3,13 @@ services:
     name: translation-api
     runtime: docker
     plan: free
+    # Port Render injects via $PORT env var at runtime; 8080 is the default fallback
+    # The Dockerfile CMD: uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}
     healthCheckPath: /health
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: HF_TOKEN
         sync: false   # set this manually in Render dashboard for higher rate limits
+      - key: DEBUG_SECRET
+        sync: false   # set this in Render dashboard to protect /debug-hf endpoint
