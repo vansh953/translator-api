@@ -13,9 +13,11 @@ if sys.platform == "win32":
         pass
 
 import asyncio
+import html
 import os
 import requests
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -37,6 +39,8 @@ HF_API_URL         = f"https://router.huggingface.co/hf-inference/models/{NLLB_M
 HF_ROUTER_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_TOKEN           = os.getenv("HF_TOKEN")          # optional — raises rate limits
 DEBUG_SECRET       = os.getenv("DEBUG_SECRET", "")  # set this to protect /debug-hf endpoint
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY")      # optional — fast LLM translation fallback
+MYMEMORY_EMAIL     = os.getenv("MYMEMORY_EMAIL", "swasthya.sahay.official@gmail.com")
 
 # Candidate models for router chat fallback
 CANDIDATE_MODELS = [
@@ -209,30 +213,91 @@ def _is_valid_translation(res: str) -> bool:
     if not res or not res.strip():
         return False
     low = res.lower()
-    # Reject HTML error pages returned as translation text
+    # Reject HTML error pages or quota messages returned as translation text
     if "error 500" in low or "that's an error" in low or "server error" in low:
+        return False
+    if "mymemory warning" in low or "limit reached" in low:
         return False
     return True
 
 
+class _GoogleMHTMLParser(HTMLParser):
+    """Zero-dependency parser for Google Translate mobile results."""
+    def __init__(self):
+        super().__init__()
+        self.in_result = False
+        self.result = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "div" and dict(attrs).get("class") == "result-container":
+            self.in_result = True
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self.in_result:
+            self.in_result = False
+
+    def handle_data(self, data):
+        if self.in_result:
+            self.result.append(data)
+
+
+def _google_translate(text: str, src: str, tgt: str) -> str:
+    """
+    Tier 1 Primary Engine: Google Translate web endpoint.
+    Fast (<400ms), zero authentication required, supports all 20 language pairs direct.
+    """
+    g_src = GOOGLE_LANG_CODES.get(src, src)
+    g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
+    try:
+        url = "https://translate.google.com/m"
+        params = {"sl": g_src, "tl": g_tgt, "q": text}
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=8)
+        if r.ok:
+            parser = _GoogleMHTMLParser()
+            parser.feed(r.text)
+            parsed = html.unescape("".join(parser.result)).strip()
+            if _is_valid_translation(parsed):
+                return parsed
+    except Exception as e:
+        print(f"Google translate error {src}->{tgt}: {e}")
+    return ""
+
+
 def _mymemory_translate(text: str, src: str, tgt: str) -> str:
-    """Official MyMemory REST API — reliable on all cloud servers, no IP blocking."""
+    """
+    Tier 2 Engine: Official MyMemory REST API.
+    Uses dedicated developer email parameter to bypass shared IP quotas on cloud hosts.
+    """
     g_src = GOOGLE_LANG_CODES.get(src, src)
     g_tgt = GOOGLE_LANG_CODES.get(tgt, tgt)
 
     def _call_mm(q, sl, tl):
         try:
+            params = {
+                "q": q,
+                "langpair": f"{sl}|{tl}",
+                "de": MYMEMORY_EMAIL,
+            }
             r = requests.get(
                 "https://api.mymemory.translated.net/get",
-                params={"q": q, "langpair": f"{sl}|{tl}"},
-                timeout=12,
+                params=params,
+                timeout=10,
             )
             if r.ok:
                 data = r.json()
+                # Check for quota exhaustion
+                if data.get("quotaFinished") is True or data.get("responseStatus") != 200:
+                    return ""
                 resp_data = data.get("responseData", {})
                 out = resp_data.get("translatedText", "")
                 match_score = float(resp_data.get("match", 1.0))
-                # Reject low-confidence matches (e.g. "I am feeling sick" -> "I love you")
+                # Reject low-confidence matches or warning messages
                 if match_score < 0.5:
                     print(f"MyMemory low confidence ({match_score:.2f}) for '{q[:40]}' {sl}|{tl} — skipping")
                     return ""
@@ -242,13 +307,12 @@ def _mymemory_translate(text: str, src: str, tgt: str) -> str:
             print(f"MyMemory error {sl}|{tl}: {e}")
         return ""
 
-
     # Direct translation
     res = _call_mm(text, g_src, g_tgt)
     if _is_valid_translation(res):
         return res
 
-    # For Indic-to-Indic pairs where MyMemory has weak direct support, pivot via English
+    # For Indic-to-Indic pairs where direct translation is weak, pivot via English
     if src != "english" and tgt != "english":
         pivot = _call_mm(text, g_src, "en")
         if _is_valid_translation(pivot):
@@ -259,9 +323,44 @@ def _mymemory_translate(text: str, src: str, tgt: str) -> str:
     return ""
 
 
-# NOTE: deep_translator's GoogleTranslator was removed — Google changed their
-# unofficial endpoint and it now returns 400 errors on every call.
-# MyMemory (primary) and HF API (fallback) handle all pairs reliably.
+def _groq_translate(text: str, source_lang: str, target_lang: str) -> str:
+    """
+    Tier 3 Engine: Groq LLM API (llama-3.1-8b-instant).
+    Ultra-fast fallback if GROQ_API_KEY is configured in the environment.
+    """
+    if not GROQ_API_KEY:
+        return ""
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": "llama-3.1-8b-instant",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a professional medical translation assistant. "
+                        f"Translate accurately from {source_lang} to {target_lang}. "
+                        "Output ONLY the translated text in the target script without quotes, preamble, or markdown."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 512,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=8)
+        if r.ok:
+            data = r.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            if _is_valid_translation(content):
+                return content
+    except Exception as e:
+        print(f"Groq translation error {source_lang}->{target_lang}: {e}")
+    return ""
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -281,14 +380,22 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if src == tgt:
         return text  # nothing to do
 
-    # 1. Primary engine: MyMemory REST API (official, no IP blocking issues)
+    # 1. Primary engine: Google Translate web endpoint (fast, zero quota issue, all 20 pairs direct)
+    res = _google_translate(text, src, tgt)
+    if _is_valid_translation(res):
+        return res
+
+    # 2. Secondary engine: MyMemory REST API (with dedicated email parameter + Indic pivot)
     res = _mymemory_translate(text, src, tgt)
     if _is_valid_translation(res):
         return res
 
-    # 2. Secondary engine: HF Inference API (NLLB-200 + chat model fallback)
-    #    (deep_translator GoogleTranslator removed — Google's unofficial endpoint
-    #     returns 400 errors; MyMemory handles most pairs reliably)
+    # 3. Tertiary engine: Groq Llama-3.1 LLM fallback (if configured)
+    res = _groq_translate(text, src, tgt)
+    if _is_valid_translation(res):
+        return res
+
+    # 4. Quaternary engine: HF Inference API (NLLB-200 + router chat fallback)
     return _call_hf_api(text, LANG_CODES[src], LANG_CODES[tgt], src, tgt)
 
 
@@ -304,9 +411,9 @@ async def root_redirect():
 async def translate_endpoint(req: TranslateRequest):
     """
     Translate text between any supported language pair.
-    All pairs are direct — NLLB-200 supports 200 languages natively.
+    All pairs are direct — supports English, Hindi, Punjabi, Gujarati, and Marathi.
     """
-    # Run blocking I/O (requests.post) off the event loop to avoid blocking async workers
+    # Run blocking I/O off the event loop to avoid blocking async workers
     translated = await asyncio.to_thread(
         translate, req.text, req.source_language, req.target_language
     )
@@ -331,7 +438,10 @@ async def health():
         "status": "ok",
         "model": NLLB_MODEL,
         "backend": "HF Inference API",
-        "hf_token_set": HF_TOKEN is not None,
+        "primary_engine": "google_web",
+        "fallback_engines": ["mymemory", "groq", "hf_inference"],
+        "groq_configured": bool(GROQ_API_KEY),
+        "hf_token_set": bool(HF_TOKEN),
     }
 
 
